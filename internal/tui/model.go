@@ -14,25 +14,34 @@ import (
 type SaveCacheFunc func([]api.Light)
 
 type Model struct {
-	client    *api.Client
-	saveCache SaveCacheFunc
-	lights    []api.Light
-	cursor    int
-	width     int
-	height    int
-	loading   bool
-	message   string
-	err       error
+	client       *api.Client
+	saveCache    SaveCacheFunc
+	lights       []api.Light
+	cursor       int
+	width        int
+	height       int
+	loading      bool
+	message      string
+	err          error
+	mode         viewMode
+	picker       colorPicker
+	colorTargets []api.Light
 }
 
 type lightsMsg []api.Light
 type errMsg struct{ err error }
 type actionMsg string
+type viewMode int
 type colorPreset struct {
 	key   string
 	name  string
 	value string
 }
+
+const (
+	modeDashboard viewMode = iota
+	modeColorPicker
+)
 
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
@@ -71,6 +80,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.mode == modeColorPicker {
+			return m.updateColorPicker(msg.String())
+		}
+
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			return m, tea.Quit
@@ -100,8 +113,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.adjustBrightnessCmd(25)
 		case "-", "_":
 			return m, m.adjustBrightnessCmd(-25)
+		case "c":
+			return m.openColorPicker(false)
+		case "C":
+			return m.openColorPicker(true)
 		case "1", "2", "3", "4", "5", "6":
-			return m, m.colorPresetCmd(msg.String())
+			return m.quickColorPreset(msg.String())
 		}
 	case lightsMsg:
 		m.loading = false
@@ -133,6 +150,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	if m.mode == modeColorPicker {
+		return m.picker.View(m.width, "h/j/k/l or arrows move  tab/[ ] palette  enter apply  esc back  q quit")
+	}
+
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("huectl"))
 	if m.client.BridgeIP != "" {
@@ -165,7 +186,7 @@ func (m Model) View() string {
 		b.WriteString(dimStyle.Render(m.message))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  1-6 color  a all  r refresh  q quit"))
+	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  c color  C all colors  1-6 quick  r refresh  q quit"))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -258,14 +279,77 @@ func (m Model) adjustBrightnessCmd(delta int) tea.Cmd {
 	}
 }
 
-func (m Model) colorPresetCmd(key string) tea.Cmd {
+func (m Model) updateColorPicker(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "q", "ctrl+c":
+		return m, tea.Quit
+	case "esc", "c":
+		m.mode = modeDashboard
+		m.colorTargets = nil
+		m.message = "ready"
+		return m, nil
+	case " ", "enter":
+		choice := m.picker.Selected()
+		targets := append([]api.Light(nil), m.colorTargets...)
+		m.mode = modeDashboard
+		m.colorTargets = nil
+		m.message = "setting " + strings.ToLower(choice.Name)
+		return m, m.colorChoiceCmd(choice, targets)
+	default:
+		m.picker = m.picker.HandleKey(key, m.width)
+		return m, nil
+	}
+}
+
+func (m Model) openColorPicker(all bool) (tea.Model, tea.Cmd) {
 	if len(m.lights) == 0 {
-		return nil
+		m.message = "no lights available"
+		return m, nil
+	}
+
+	var targets []api.Light
+	targetLabel := ""
+	if all {
+		for _, light := range m.lights {
+			if light.HasColor {
+				targets = append(targets, light)
+			}
+		}
+		targetLabel = "all color lights"
+	} else {
+		light := m.lights[m.cursor]
+		if light.HasColor {
+			targets = append(targets, light)
+			targetLabel = light.Name
+		}
+	}
+
+	if len(targets) == 0 {
+		if all {
+			m.message = "no color-capable lights"
+		} else {
+			m.message = m.lights[m.cursor].Name + " does not support color"
+		}
+		return m, nil
+	}
+
+	if len(targets) > 1 {
+		targetLabel = fmt.Sprintf("%s (%d)", targetLabel, len(targets))
+	}
+	m.mode = modeColorPicker
+	m.picker = newColorPicker("choose a color", targetLabel)
+	m.colorTargets = targets
+	return m, nil
+}
+
+func (m Model) quickColorPreset(key string) (tea.Model, tea.Cmd) {
+	if len(m.lights) == 0 {
+		return m, nil
 	}
 	light := m.lights[m.cursor]
 	if !light.HasColor {
 		m.message = light.Name + " does not support color"
-		return nil
+		return m, nil
 	}
 	var selected colorPreset
 	for _, preset := range presets {
@@ -275,9 +359,9 @@ func (m Model) colorPresetCmd(key string) tea.Cmd {
 		}
 	}
 	if selected.key == "" {
-		return nil
+		return m, nil
 	}
-	return func() tea.Msg {
+	return m, func() tea.Msg {
 		xy, err := api.ParseColor(selected.value)
 		if err != nil {
 			return errMsg{err: err}
@@ -288,6 +372,30 @@ func (m Model) colorPresetCmd(key string) tea.Cmd {
 			return errMsg{err: err}
 		}
 		return actionMsg(fmt.Sprintf("%s color %s", light.Name, selected.name))
+	}
+}
+
+func (m Model) colorChoiceCmd(choice ColorChoice, targets []api.Light) tea.Cmd {
+	if len(targets) == 0 {
+		return nil
+	}
+	return func() tea.Msg {
+		xy, err := api.ParseColor(choice.Value)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		defer cancel()
+		for _, light := range targets {
+			if err := m.client.SetColor(ctx, light.ID, xy, api.ColorOptions{TurnOn: true}); err != nil {
+				return errMsg{err: err}
+			}
+		}
+		target := targets[0].Name
+		if len(targets) > 1 {
+			target = fmt.Sprintf("%d lights", len(targets))
+		}
+		return actionMsg(fmt.Sprintf("%s color %s", target, strings.ToLower(choice.Name)))
 	}
 }
 

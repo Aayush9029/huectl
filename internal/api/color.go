@@ -23,18 +23,59 @@ type RGB struct {
 	B int
 }
 
-var namedColors = map[string]RGB{
-	"red":     {R: 255, G: 0, B: 0},
-	"green":   {R: 0, G: 255, B: 0},
-	"blue":    {R: 0, G: 0, B: 255},
-	"white":   {R: 255, G: 255, B: 255},
-	"warm":    {R: 255, G: 190, B: 120},
-	"orange":  {R: 255, G: 136, B: 0},
-	"yellow":  {R: 255, G: 255, B: 0},
-	"purple":  {R: 128, G: 0, B: 255},
-	"pink":    {R: 255, G: 80, B: 180},
-	"cyan":    {R: 0, G: 255, B: 255},
-	"magenta": {R: 255, G: 0, B: 255},
+type namedColor struct {
+	Name string
+	RGB  RGB
+}
+
+var namedColorList = []namedColor{
+	{Name: "warm", RGB: RGB{R: 255, G: 190, B: 120}},
+	{Name: "soft-white", RGB: RGB{R: 255, G: 220, B: 170}},
+	{Name: "white", RGB: RGB{R: 255, G: 255, B: 255}},
+	{Name: "daylight", RGB: RGB{R: 215, G: 235, B: 255}},
+	{Name: "red", RGB: RGB{R: 255, G: 0, B: 0}},
+	{Name: "orange", RGB: RGB{R: 255, G: 136, B: 0}},
+	{Name: "yellow", RGB: RGB{R: 255, G: 255, B: 0}},
+	{Name: "green", RGB: RGB{R: 0, G: 255, B: 0}},
+	{Name: "cyan", RGB: RGB{R: 0, G: 255, B: 255}},
+	{Name: "blue", RGB: RGB{R: 0, G: 0, B: 255}},
+	{Name: "purple", RGB: RGB{R: 128, G: 0, B: 255}},
+	{Name: "pink", RGB: RGB{R: 255, G: 80, B: 180}},
+	{Name: "magenta", RGB: RGB{R: 255, G: 0, B: 255}},
+	{Name: "candle", RGB: RGB{R: 255, G: 147, B: 41}},
+	{Name: "sunset", RGB: RGB{R: 255, G: 94, B: 58}},
+	{Name: "peach", RGB: RGB{R: 255, G: 179, B: 128}},
+	{Name: "rose", RGB: RGB{R: 255, G: 105, B: 140}},
+	{Name: "lavender", RGB: RGB{R: 181, G: 126, B: 255}},
+	{Name: "sky", RGB: RGB{R: 92, G: 184, B: 255}},
+	{Name: "ocean", RGB: RGB{R: 0, G: 112, B: 255}},
+	{Name: "forest", RGB: RGB{R: 29, G: 145, B: 77}},
+	{Name: "mint", RGB: RGB{R: 98, G: 255, B: 177}},
+	{Name: "ice", RGB: RGB{R: 174, G: 232, B: 255}},
+	{Name: "night", RGB: RGB{R: 54, G: 72, B: 255}},
+	{Name: "amber", RGB: RGB{R: 255, G: 180, B: 58}},
+	{Name: "spring", RGB: RGB{R: 112, G: 255, B: 112}},
+	{Name: "blossom", RGB: RGB{R: 255, G: 139, B: 203}},
+	{Name: "meadow", RGB: RGB{R: 125, G: 214, B: 92}},
+	{Name: "summer", RGB: RGB{R: 255, G: 211, B: 92}},
+	{Name: "golden", RGB: RGB{R: 255, G: 200, B: 0}},
+	{Name: "coral", RGB: RGB{R: 255, G: 100, B: 84}},
+	{Name: "autumn", RGB: RGB{R: 255, G: 112, B: 38}},
+	{Name: "copper", RGB: RGB{R: 184, G: 86, B: 36}},
+	{Name: "wine", RGB: RGB{R: 142, G: 36, B: 85}},
+	{Name: "winter", RGB: RGB{R: 151, G: 214, B: 255}},
+	{Name: "arctic", RGB: RGB{R: 115, G: 245, B: 255}},
+	{Name: "frost", RGB: RGB{R: 225, G: 245, B: 255}},
+}
+
+var namedColors = buildNamedColors(namedColorList)
+
+func buildNamedColors(colors []namedColor) map[string]RGB {
+	result := make(map[string]RGB, len(colors))
+	for _, color := range colors {
+		result[color.Name] = color.RGB
+	}
+	return result
 }
 
 func ParseColor(value string) (XY, error) {

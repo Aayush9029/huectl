@@ -11,6 +11,8 @@ func TestParseRGB(t *testing.T) {
 		{name: "hex with hash", in: "#ff8800", want: RGB{R: 255, G: 136, B: 0}},
 		{name: "hex without hash", in: "ff8800", want: RGB{R: 255, G: 136, B: 0}},
 		{name: "named", in: "blue", want: RGB{R: 0, G: 0, B: 255}},
+		{name: "named mood", in: "sunset", want: RGB{R: 255, G: 94, B: 58}},
+		{name: "named multi word", in: "soft-white", want: RGB{R: 255, G: 220, B: 170}},
 		{name: "rgb", in: "rgb:1,2,3", want: RGB{R: 1, G: 2, B: 3}},
 		{name: "hsv", in: "hsv:30,100,100", want: RGB{R: 255, G: 128, B: 0}},
 	}

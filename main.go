@@ -88,7 +88,8 @@ func showHelp() {
 	fmt.Println("    on [target]           Turn lights on")
 	fmt.Println("    off [target]          Turn lights off")
 	fmt.Println("    toggle [target]       Toggle lights")
-	fmt.Println("    color [target] VALUE  Set color on matched color lights")
+	fmt.Println("    color [target] [VALUE]")
+	fmt.Println("                          Set color, or open a color picker when VALUE is omitted")
 	fmt.Println("    ui                    Open the interactive light dashboard")
 	fmt.Println("    config                Show config path and bridge IP")
 	fmt.Println()
@@ -107,7 +108,8 @@ func showHelp() {
 	fmt.Println("    huectl on 2 -b 180")
 	fmt.Println("    huectl off all")
 	fmt.Println("    huectl toggle \"lamp 1\"")
-	fmt.Println("    huectl color desk ff8800")
+	fmt.Println("    huectl color desk")
+	fmt.Println("    huectl color desk sunset")
 	fmt.Println("    huectl color all blue --no-on")
 	fmt.Println()
 }
@@ -308,9 +310,8 @@ func cmdColor(args []string) error {
 	if err != nil {
 		return err
 	}
-	xy, err := api.ParseColor(opts.colorValue)
-	if err != nil {
-		return err
+	if opts.colorValue == "" && !ui.IsTTY() {
+		return errors.New("color value required when not running interactively: huectl color [target] <color>")
 	}
 
 	cfg, client, err := configuredClient(opts.bridgeIP)
@@ -336,6 +337,23 @@ func cmdColor(args []string) error {
 		return fmt.Errorf("no color-capable lights matched target: %s", opts.target)
 	}
 
+	if opts.colorValue == "" {
+		choice, ok, err := pickColor(colorTargetLabel(opts.target, colorTargets))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			ui.Dimf("Canceled")
+			return nil
+		}
+		opts.colorValue = choice.Value
+	}
+
+	xy, err := api.ParseColor(opts.colorValue)
+	if err != nil {
+		return err
+	}
+
 	colorOpts := api.ColorOptions{TurnOn: !opts.noOn}
 	if opts.brightnessSet {
 		colorOpts.Brightness = opts.brightness
@@ -357,6 +375,30 @@ func cmdColor(args []string) error {
 	}
 	_, _ = fetchAndCache(cfg, client)
 	return nil
+}
+
+func pickColor(target string) (tui.ColorChoice, bool, error) {
+	program := tea.NewProgram(tui.NewColorPickerModel(target), tea.WithAltScreen())
+	final, err := program.Run()
+	if err != nil {
+		return tui.ColorChoice{}, false, err
+	}
+	model, ok := final.(tui.ColorPickerModel)
+	if !ok {
+		return tui.ColorChoice{}, false, errors.New("color picker returned an unexpected model")
+	}
+	choice, ok := model.Selection()
+	return choice, ok, nil
+}
+
+func colorTargetLabel(target string, lights []api.Light) string {
+	if len(lights) == 1 {
+		return lights[0].Name
+	}
+	if strings.TrimSpace(target) == "" || target == "all" {
+		return fmt.Sprintf("all color lights (%d)", len(lights))
+	}
+	return fmt.Sprintf("%s (%d lights)", target, len(lights))
 }
 
 func cmdUI(args []string) error {
@@ -549,13 +591,18 @@ func parseColorOptions(args []string) (options, error) {
 	}
 
 	switch len(positional) {
+	case 0:
 	case 1:
-		opts.colorValue = positional[0]
+		if _, err := api.ParseRGB(positional[0]); err == nil {
+			opts.colorValue = positional[0]
+		} else {
+			opts.target = positional[0]
+		}
 	case 2:
 		opts.target = positional[0]
 		opts.colorValue = positional[1]
 	default:
-		return opts, errors.New("usage: huectl color [target] <#rrggbb|name|rgb:r,g,b|hsv:h,s,v>")
+		return opts, errors.New("usage: huectl color [target] [#rrggbb|name|rgb:r,g,b|hsv:h,s,v]")
 	}
 	return opts, nil
 }

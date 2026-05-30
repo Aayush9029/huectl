@@ -25,6 +25,7 @@ brew install huectl
 ## Usage
 
 ```bash
+huectl             # interactive dashboard
 huectl auth
 huectl status
 huectl on
@@ -32,6 +33,8 @@ huectl on 2 -b 180
 huectl off all
 huectl toggle "lamp 1"
 ```
+
+`huectl auth` stores the Hue Bridge app key locally in `~/.config/huectl/config.json`.
 
 ## License
 

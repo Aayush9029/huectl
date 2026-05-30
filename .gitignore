@@ -1,5 +1,7 @@
 /AppIcon.icon
 /AppIcon.png
+/.build
+/huectl
 /*.tar.gz
 /.env
 /config

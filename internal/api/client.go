@@ -112,6 +112,8 @@ func (c *Client) Lights(ctx context.Context) ([]Light, error) {
 
 	lights := make([]Light, 0, len(raw))
 	for id, light := range raw {
+		xy, hasXY := xyFromSlice(light.State.XY)
+		lightType := strings.ToLower(light.Type)
 		lights = append(lights, Light{
 			ID:         id,
 			Name:       light.Name,
@@ -121,6 +123,8 @@ func (c *Client) Lights(ctx context.Context) ([]Light, error) {
 			Brightness: light.State.Bri,
 			Reachable:  light.State.Reachable,
 			ColorMode:  light.State.ColorMode,
+			XY:         xy,
+			HasColor:   hasXY || lightType == "color light" || lightType == "extended color light",
 		})
 	}
 	sort.Slice(lights, func(i, j int) bool {
@@ -142,6 +146,19 @@ func (c *Client) SetBrightness(ctx context.Context, id string, brightness int) e
 		"on":  true,
 		"bri": brightness,
 	})
+}
+
+func (c *Client) SetColor(ctx context.Context, id string, color XY, opts ColorOptions) error {
+	body := map[string]any{
+		"xy": []float64{color.X, color.Y},
+	}
+	if opts.TurnOn {
+		body["on"] = true
+	}
+	if opts.Brightness > 0 {
+		body["bri"] = opts.Brightness
+	}
+	return c.putState(ctx, id, body)
 }
 
 func (c *Client) putState(ctx context.Context, id string, body map[string]any) error {
@@ -210,4 +227,11 @@ func naturalLess(a, b string) bool {
 		return len(a) < len(b)
 	}
 	return a < b
+}
+
+func xyFromSlice(values []float64) (XY, bool) {
+	if len(values) != 2 {
+		return XY{}, false
+	}
+	return XY{X: values[0], Y: values[1]}, true
 }

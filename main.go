@@ -19,10 +19,13 @@ import (
 var version = "dev"
 
 type options struct {
-	bridgeIP   string
-	target     string
-	brightness int
-	timeout    time.Duration
+	bridgeIP      string
+	target        string
+	brightness    int
+	brightnessSet bool
+	colorValue    string
+	noOn          bool
+	timeout       time.Duration
 }
 
 func main() {
@@ -59,6 +62,8 @@ func run(args []string) error {
 		return cmdPower(args[1:], false)
 	case "toggle":
 		return cmdToggle(args[1:])
+	case "color":
+		return cmdColor(args[1:])
 	case "ui":
 		return cmdUI(args[1:])
 	case "config":
@@ -83,11 +88,13 @@ func showHelp() {
 	fmt.Println("    on [target]           Turn lights on")
 	fmt.Println("    off [target]          Turn lights off")
 	fmt.Println("    toggle [target]       Toggle lights")
+	fmt.Println("    color [target] VALUE  Set color on matched color lights")
 	fmt.Println("    ui                    Open the interactive light dashboard")
 	fmt.Println("    config                Show config path and bridge IP")
 	fmt.Println()
 	fmt.Println("OPTIONS")
 	fmt.Println("    -b, --brightness N    Brightness for on, 1-254 (default: 254)")
+	fmt.Println("    --no-on               Set color without turning lights on")
 	fmt.Println("    --bridge IP           Use a specific bridge IP")
 	fmt.Println("    --timeout SECONDS     Pairing timeout for auth (default: 45)")
 	fmt.Println("    -h, --help            Show this help")
@@ -100,6 +107,8 @@ func showHelp() {
 	fmt.Println("    huectl on 2 -b 180")
 	fmt.Println("    huectl off all")
 	fmt.Println("    huectl toggle \"lamp 1\"")
+	fmt.Println("    huectl color desk ff8800")
+	fmt.Println("    huectl color all blue --no-on")
 	fmt.Println()
 }
 
@@ -294,6 +303,62 @@ func cmdToggle(args []string) error {
 	return nil
 }
 
+func cmdColor(args []string) error {
+	opts, err := parseColorOptions(args)
+	if err != nil {
+		return err
+	}
+	xy, err := api.ParseColor(opts.colorValue)
+	if err != nil {
+		return err
+	}
+
+	cfg, client, err := configuredClient(opts.bridgeIP)
+	if err != nil {
+		return err
+	}
+	lights, err := fetchAndCache(cfg, client)
+	if err != nil {
+		return err
+	}
+	targets := matchLights(lights, opts.target)
+	if len(targets) == 0 {
+		return fmt.Errorf("no lights matched target: %s", opts.target)
+	}
+
+	colorTargets := make([]api.Light, 0, len(targets))
+	for _, light := range targets {
+		if light.HasColor {
+			colorTargets = append(colorTargets, light)
+		}
+	}
+	if len(colorTargets) == 0 {
+		return fmt.Errorf("no color-capable lights matched target: %s", opts.target)
+	}
+
+	colorOpts := api.ColorOptions{TurnOn: !opts.noOn}
+	if opts.brightnessSet {
+		colorOpts.Brightness = opts.brightness
+	}
+
+	ui.Header("huectl")
+	fmt.Println()
+	for _, light := range colorTargets {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		err := client.SetColor(ctx, light.ID, xy, colorOpts)
+		cancel()
+		if err != nil {
+			return err
+		}
+		ui.Success(fmt.Sprintf("Color: %s xy=%.4f,%.4f", light.Name, xy.X, xy.Y))
+	}
+	if skipped := len(targets) - len(colorTargets); skipped > 0 {
+		ui.Dimf("Skipped %d non-color light(s)", skipped)
+	}
+	_, _ = fetchAndCache(cfg, client)
+	return nil
+}
+
 func cmdUI(args []string) error {
 	opts, err := parseOptions(args)
 	if err != nil {
@@ -418,6 +483,9 @@ func parseOptions(args []string) (options, error) {
 				return opts, fmt.Errorf("invalid brightness: %s", args[i])
 			}
 			opts.brightness = clamp(n, 1, 254)
+			opts.brightnessSet = true
+		case "--no-on":
+			opts.noOn = true
 		case "--bridge":
 			if i+1 >= len(args) {
 				return opts, errors.New("--bridge requires an IP address")
@@ -443,6 +511,51 @@ func parseOptions(args []string) (options, error) {
 			}
 			opts.target = args[i]
 		}
+	}
+	return opts, nil
+}
+
+func parseColorOptions(args []string) (options, error) {
+	opts := options{target: "all"}
+	var positional []string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-b", "--brightness":
+			if i+1 >= len(args) {
+				return opts, errors.New("--brightness requires a value")
+			}
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil {
+				return opts, fmt.Errorf("invalid brightness: %s", args[i])
+			}
+			opts.brightness = clamp(n, 1, 254)
+			opts.brightnessSet = true
+		case "--no-on":
+			opts.noOn = true
+		case "--bridge":
+			if i+1 >= len(args) {
+				return opts, errors.New("--bridge requires an IP address")
+			}
+			i++
+			opts.bridgeIP = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return opts, fmt.Errorf("unknown option: %s", args[i])
+			}
+			positional = append(positional, args[i])
+		}
+	}
+
+	switch len(positional) {
+	case 1:
+		opts.colorValue = positional[0]
+	case 2:
+		opts.target = positional[0]
+		opts.colorValue = positional[1]
+	default:
+		return opts, errors.New("usage: huectl color [target] <#rrggbb|name|rgb:r,g,b|hsv:h,s,v>")
 	}
 	return opts, nil
 }

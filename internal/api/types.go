@@ -16,6 +16,8 @@ type Light struct {
 	Brightness int
 	Reachable  bool
 	ColorMode  string
+	XY         XY
+	HasColor   bool
 }
 
 type CachedLight struct {
@@ -27,15 +29,18 @@ type CachedLight struct {
 	Brightness int       `json:"brightness"`
 	Reachable  bool      `json:"reachable"`
 	ColorMode  string    `json:"color_mode,omitempty"`
+	XY         XY        `json:"xy,omitempty"`
+	HasColor   bool      `json:"has_color,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type rawLight struct {
 	State struct {
-		On        bool   `json:"on"`
-		Bri       int    `json:"bri"`
-		Reachable bool   `json:"reachable"`
-		ColorMode string `json:"colormode"`
+		On        bool      `json:"on"`
+		Bri       int       `json:"bri"`
+		Reachable bool      `json:"reachable"`
+		ColorMode string    `json:"colormode"`
+		XY        []float64 `json:"xy"`
 	} `json:"state"`
 	Type    string `json:"type"`
 	Name    string `json:"name"`
@@ -52,6 +57,8 @@ func (l Light) CacheEntry(now time.Time) CachedLight {
 		Brightness: l.Brightness,
 		Reachable:  l.Reachable,
 		ColorMode:  l.ColorMode,
+		XY:         l.XY,
+		HasColor:   l.HasColor,
 		UpdatedAt:  now,
 	}
 }

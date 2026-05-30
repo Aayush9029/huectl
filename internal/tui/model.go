@@ -28,6 +28,11 @@ type Model struct {
 type lightsMsg []api.Light
 type errMsg struct{ err error }
 type actionMsg string
+type colorPreset struct {
+	key   string
+	name  string
+	value string
+}
 
 var (
 	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
@@ -37,6 +42,14 @@ var (
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	rowStyle   = lipgloss.NewStyle().PaddingLeft(1)
 	activeRow  = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6")).PaddingLeft(1).PaddingRight(1)
+	presets    = []colorPreset{
+		{key: "1", name: "warm", value: "warm"},
+		{key: "2", name: "white", value: "white"},
+		{key: "3", name: "red", value: "red"},
+		{key: "4", name: "orange", value: "orange"},
+		{key: "5", name: "blue", value: "blue"},
+		{key: "6", name: "purple", value: "purple"},
+	}
 )
 
 func NewModel(client *api.Client, saveCache SaveCacheFunc) Model {
@@ -87,6 +100,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.adjustBrightnessCmd(25)
 		case "-", "_":
 			return m, m.adjustBrightnessCmd(-25)
+		case "1", "2", "3", "4", "5", "6":
+			return m, m.colorPresetCmd(msg.String())
 		}
 	case lightsMsg:
 		m.loading = false
@@ -150,7 +165,7 @@ func (m Model) View() string {
 		b.WriteString(dimStyle.Render(m.message))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  a all  r refresh  q quit"))
+	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  1-6 color  a all  r refresh  q quit"))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -164,7 +179,11 @@ func (m Model) renderRow(index int, light api.Light) string {
 	if !light.Reachable {
 		reachable = "unreachable"
 	}
-	line := fmt.Sprintf("%-2s %-24s %s  bri=%-3d  %s", light.ID, truncate(light.Name, 24), state, light.Brightness, reachable)
+	color := "white-only"
+	if light.HasColor {
+		color = fmt.Sprintf("xy=%.3f,%.3f", light.XY.X, light.XY.Y)
+	}
+	line := fmt.Sprintf("%-2s %-24s %s  bri=%-3d  %-11s  %s", light.ID, truncate(light.Name, 24), state, light.Brightness, reachable, color)
 	if index == m.cursor {
 		return activeRow.Render(line)
 	}
@@ -236,6 +255,39 @@ func (m Model) adjustBrightnessCmd(delta int) tea.Cmd {
 			return errMsg{err: err}
 		}
 		return actionMsg(fmt.Sprintf("%s brightness %d", light.Name, next))
+	}
+}
+
+func (m Model) colorPresetCmd(key string) tea.Cmd {
+	if len(m.lights) == 0 {
+		return nil
+	}
+	light := m.lights[m.cursor]
+	if !light.HasColor {
+		m.message = light.Name + " does not support color"
+		return nil
+	}
+	var selected colorPreset
+	for _, preset := range presets {
+		if preset.key == key {
+			selected = preset
+			break
+		}
+	}
+	if selected.key == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		xy, err := api.ParseColor(selected.value)
+		if err != nil {
+			return errMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := m.client.SetColor(ctx, light.ID, xy, api.ColorOptions{TurnOn: true}); err != nil {
+			return errMsg{err: err}
+		}
+		return actionMsg(fmt.Sprintf("%s color %s", light.Name, selected.name))
 	}
 }
 

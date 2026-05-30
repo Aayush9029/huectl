@@ -32,9 +32,14 @@ huectl on
 huectl on 2 -b 180
 huectl off all
 huectl toggle "lamp 1"
+huectl color desk ff8800
+huectl color all blue --no-on
 ```
 
 `huectl auth` stores the Hue Bridge app key locally in `~/.config/huectl/config.json`.
+
+Colors can be hex (`ff8800` or quoted `"#ff8800"`), basic names like `blue`,
+or `rgb:r,g,b` / `hsv:h,s,v`.
 
 ## License
 

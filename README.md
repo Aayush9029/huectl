@@ -43,8 +43,8 @@ Colors can be hex (`ff8800` or quoted `"#ff8800"`), basic names like `blue`,
 palette names like `sunset`, `soft-white`, `spring`, or `ocean`, or
 `rgb:r,g,b` / `hsv:h,s,v`.
 
-Run `huectl` for the interactive dashboard. Press `c` to pick a color for the
-selected light, or `C` to pick a color for all color-capable lights.
+Run `huectl` for the interactive dashboard. Press `c` to pick a color for all
+color-capable lights.
 
 ## License
 

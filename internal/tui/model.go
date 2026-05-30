@@ -32,11 +32,6 @@ type lightsMsg []api.Light
 type errMsg struct{ err error }
 type actionMsg string
 type viewMode int
-type colorPreset struct {
-	key   string
-	name  string
-	value string
-}
 
 const (
 	modeDashboard viewMode = iota
@@ -51,14 +46,6 @@ var (
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	rowStyle   = lipgloss.NewStyle().PaddingLeft(1)
 	activeRow  = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("6")).PaddingLeft(1).PaddingRight(1)
-	presets    = []colorPreset{
-		{key: "1", name: "warm", value: "warm"},
-		{key: "2", name: "white", value: "white"},
-		{key: "3", name: "red", value: "red"},
-		{key: "4", name: "orange", value: "orange"},
-		{key: "5", name: "blue", value: "blue"},
-		{key: "6", name: "purple", value: "purple"},
-	}
 )
 
 func NewModel(client *api.Client, saveCache SaveCacheFunc) Model {
@@ -114,11 +101,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "-", "_":
 			return m, m.adjustBrightnessCmd(-25)
 		case "c":
-			return m.openColorPicker(false)
-		case "C":
-			return m.openColorPicker(true)
-		case "1", "2", "3", "4", "5", "6":
-			return m.quickColorPreset(msg.String())
+			return m.openColorPicker()
 		}
 	case lightsMsg:
 		m.loading = false
@@ -186,7 +169,7 @@ func (m Model) View() string {
 		b.WriteString(dimStyle.Render(m.message))
 	}
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  c color  C all colors  1-6 quick  r refresh  q quit"))
+	b.WriteString(dimStyle.Render("j/k select  space toggle  o on  f off  +/- brightness  c color  r refresh  q quit"))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -301,38 +284,25 @@ func (m Model) updateColorPicker(key string) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m Model) openColorPicker(all bool) (tea.Model, tea.Cmd) {
+func (m Model) openColorPicker() (tea.Model, tea.Cmd) {
 	if len(m.lights) == 0 {
 		m.message = "no lights available"
 		return m, nil
 	}
 
 	var targets []api.Light
-	targetLabel := ""
-	if all {
-		for _, light := range m.lights {
-			if light.HasColor {
-				targets = append(targets, light)
-			}
-		}
-		targetLabel = "all color lights"
-	} else {
-		light := m.lights[m.cursor]
+	for _, light := range m.lights {
 		if light.HasColor {
 			targets = append(targets, light)
-			targetLabel = light.Name
 		}
 	}
 
 	if len(targets) == 0 {
-		if all {
-			m.message = "no color-capable lights"
-		} else {
-			m.message = m.lights[m.cursor].Name + " does not support color"
-		}
+		m.message = "no color-capable lights"
 		return m, nil
 	}
 
+	targetLabel := "all color lights"
 	if len(targets) > 1 {
 		targetLabel = fmt.Sprintf("%s (%d)", targetLabel, len(targets))
 	}
@@ -340,39 +310,6 @@ func (m Model) openColorPicker(all bool) (tea.Model, tea.Cmd) {
 	m.picker = newColorPicker("choose a color", targetLabel)
 	m.colorTargets = targets
 	return m, nil
-}
-
-func (m Model) quickColorPreset(key string) (tea.Model, tea.Cmd) {
-	if len(m.lights) == 0 {
-		return m, nil
-	}
-	light := m.lights[m.cursor]
-	if !light.HasColor {
-		m.message = light.Name + " does not support color"
-		return m, nil
-	}
-	var selected colorPreset
-	for _, preset := range presets {
-		if preset.key == key {
-			selected = preset
-			break
-		}
-	}
-	if selected.key == "" {
-		return m, nil
-	}
-	return m, func() tea.Msg {
-		xy, err := api.ParseColor(selected.value)
-		if err != nil {
-			return errMsg{err: err}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		if err := m.client.SetColor(ctx, light.ID, xy, api.ColorOptions{TurnOn: true}); err != nil {
-			return errMsg{err: err}
-		}
-		return actionMsg(fmt.Sprintf("%s color %s", light.Name, selected.name))
-	}
 }
 
 func (m Model) colorChoiceCmd(choice ColorChoice, targets []api.Light) tea.Cmd {

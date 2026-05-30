@@ -1,0 +1,502 @@
+#!/bin/bash
+#***************************************************************************
+#*** huectl - local Philips Hue bridge control
+#***************************************************************************
+
+VERSION="0.1.0"
+
+#***** color scheme *****
+if [[ -t 1 ]]; then
+    GREEN='\033[1;32m'
+    RED='\033[1;31m'
+    YELLOW='\033[1;33m'
+    CYAN='\033[1;36m'
+    BLUE='\033[1;34m'
+    DIM='\033[2m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    GREEN=''
+    RED=''
+    YELLOW=''
+    CYAN=''
+    BLUE=''
+    DIM=''
+    BOLD=''
+    RESET=''
+fi
+
+#***** defaults *****
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/huectl"
+CONFIG_FILE="$CONFIG_DIR/config"
+DEFAULT_BRIGHTNESS="254"
+DEFAULT_TIMEOUT="45"
+BRIDGE_IP="${HUE_BRIDGE_IP:-}"
+HUE_APP_KEY="${HUE_APP_KEY:-}"
+COMMAND=""
+TARGET="all"
+BRIGHTNESS="$DEFAULT_BRIGHTNESS"
+
+#***** helper functions *****
+print_header() {
+    echo -e "${CYAN}${BOLD}⚡ huectl${RESET}"
+}
+
+print_success() {
+    echo -e "${GREEN}✓${RESET} $1"
+}
+
+print_error() {
+    echo -e "${RED}✗${RESET} $1" >&2
+}
+
+print_status() {
+    echo -e "  ${GREEN}→${RESET} $1"
+}
+
+print_dim() {
+    echo -e "  ${DIM}$1${RESET}"
+}
+
+show_help() {
+    echo
+    print_header
+    echo -e "  ${DIM}control local Philips Hue lights${RESET}"
+    echo
+    echo -e "${BLUE}USAGE${RESET}"
+    echo -e "    huectl <command> [target] [options]"
+    echo
+    echo -e "${BLUE}COMMANDS${RESET}"
+    echo -e "    auth                  Pair with the bridge and save an app key"
+    echo -e "    discover              Find Hue bridges on the local network"
+    echo -e "    status                Show lights and current state"
+    echo -e "    on [target]           Turn lights on"
+    echo -e "    off [target]          Turn lights off"
+    echo -e "    toggle [target]       Toggle lights"
+    echo -e "    config                Show config path and bridge IP"
+    echo
+    echo -e "${BLUE}OPTIONS${RESET}"
+    echo -e "    -b, --brightness N    Brightness for on, 1-254 (default: $DEFAULT_BRIGHTNESS)"
+    echo -e "    --bridge IP           Use a specific bridge IP"
+    echo -e "    --timeout SECONDS     Pairing timeout for auth (default: $DEFAULT_TIMEOUT)"
+    echo -e "    -h, --help            Show this help"
+    echo -e "    -v, --version         Show version"
+    echo
+    echo -e "${BLUE}EXAMPLES${RESET}"
+    echo -e "    ${DIM}huectl status${RESET}"
+    echo -e "    ${DIM}huectl on${RESET}"
+    echo -e "    ${DIM}huectl on 2 -b 180${RESET}"
+    echo -e "    ${DIM}huectl off all${RESET}"
+    echo
+    exit 0
+}
+
+show_version() {
+    echo "huectl $VERSION"
+    exit 0
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        print_error "Missing dependency: $1"
+        exit 1
+    fi
+}
+
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck disable=SC1090
+        . "$CONFIG_FILE"
+    fi
+
+    if [[ -n "$HUE_BRIDGE_IP" ]]; then
+        BRIDGE_IP="$HUE_BRIDGE_IP"
+    fi
+}
+
+save_config() {
+    local bridge_ip="$1"
+    local app_key="$2"
+
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+    umask 077
+    {
+        printf 'BRIDGE_IP=%s\n' "$bridge_ip"
+        printf 'HUE_APP_KEY=%s\n' "$app_key"
+    } > "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+}
+
+json_get() {
+    python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+    for key in sys.argv[1].split("."):
+        if key == "":
+            continue
+        if isinstance(data, list):
+            data = data[int(key)]
+        else:
+            data = data[key]
+    print(data)
+except Exception:
+    sys.exit(1)' "$1"
+}
+
+discover_bridge() {
+    local result
+    result=$(curl -fsS --connect-timeout 3 https://discovery.meethue.com/ 2>/dev/null | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin)
+    for bridge in data:
+        ip = bridge.get("internalipaddress")
+        bridge_id = bridge.get("id", "")
+        if ip:
+            print("%s\t%s" % (ip, bridge_id))
+except Exception:
+    pass' 2>/dev/null)
+
+    if [[ -n "$result" ]]; then
+        printf '%s\n' "$result"
+        return 0
+    fi
+
+    return 1
+}
+
+bridge_ip_or_discover() {
+    if [[ -n "$BRIDGE_IP" ]]; then
+        printf '%s\n' "$BRIDGE_IP"
+        return 0
+    fi
+
+    discover_bridge | awk 'NR == 1 { print $1 }'
+}
+
+require_config() {
+    load_config
+
+    if [[ -z "$BRIDGE_IP" ]] || [[ -z "$HUE_APP_KEY" ]]; then
+        print_error "Hue bridge is not paired"
+        print_dim "Run: huectl auth"
+        exit 1
+    fi
+}
+
+api_get() {
+    curl -fsS "http://$BRIDGE_IP/api/$HUE_APP_KEY/$1"
+}
+
+api_put() {
+    local path="$1"
+    local body="$2"
+    curl -fsS -X PUT -H 'Content-Type: application/json' -d "$body" "http://$BRIDGE_IP/api/$HUE_APP_KEY/$path"
+}
+
+ensure_api_success() {
+    python3 -c 'import json, sys
+data = json.load(sys.stdin)
+errors = []
+for item in data:
+    if "error" in item:
+        errors.append(item["error"].get("description", "unknown error"))
+if errors:
+    print("; ".join(errors))
+    sys.exit(1)'
+}
+
+print_lights() {
+    python3 -c 'import json, sys
+data = json.load(sys.stdin)
+for light_id in sorted(data, key=lambda value: int(value) if value.isdigit() else value):
+    light = data[light_id]
+    state = light.get("state", {})
+    name = light.get("name", "")
+    on = "on" if state.get("on") else "off"
+    reachable = "reachable" if state.get("reachable") else "unreachable"
+    brightness = state.get("bri", "")
+    model = light.get("modelid", "")
+    print("%-3s %-24s %-4s bri=%-3s %-11s %s" % (light_id, name[:24], on, brightness, reachable, model))'
+}
+
+target_ids() {
+    local requested="$1"
+
+    if [[ "$requested" == "all" ]]; then
+        api_get "lights" | python3 -c 'import json, sys
+data = json.load(sys.stdin)
+for light_id in sorted(data, key=lambda value: int(value) if value.isdigit() else value):
+    print(light_id)'
+        return 0
+    fi
+
+    if [[ "$requested" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$requested"
+        return 0
+    fi
+
+    api_get "lights" | python3 -c 'import json, sys
+needle = sys.argv[1].lower()
+data = json.load(sys.stdin)
+matches = []
+for light_id, light in data.items():
+    name = light.get("name", "").lower()
+    if needle in name:
+        matches.append(light_id)
+for light_id in sorted(matches, key=lambda value: int(value) if value.isdigit() else value):
+    print(light_id)' "$requested"
+}
+
+show_status() {
+    require_config
+    print_header
+    print_dim "bridge $BRIDGE_IP"
+    echo
+    api_get "lights" | print_lights
+}
+
+run_discover() {
+    print_header
+    echo
+
+    local bridges
+    bridges=$(discover_bridge)
+    if [[ -z "$bridges" ]]; then
+        print_error "No Hue bridges found"
+        exit 1
+    fi
+
+    printf '%s\n' "$bridges" | while IFS="$(printf '\t')" read -r ip bridge_id; do
+        print_success "$ip ${DIM}${bridge_id}${RESET}"
+    done
+}
+
+run_auth() {
+    load_config
+
+    local bridge_ip
+    bridge_ip=$(bridge_ip_or_discover)
+
+    if [[ -z "$bridge_ip" ]]; then
+        print_error "No Hue bridge found"
+        exit 1
+    fi
+
+    print_header
+    echo
+    print_status "Using bridge ${BOLD}$bridge_ip${RESET}"
+    print_status "Press the bridge link button now"
+    echo
+
+    local attempt
+    local response
+    local app_key
+    local error
+
+    attempt=1
+    while [[ "$attempt" -le "$DEFAULT_TIMEOUT" ]]; do
+        response=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"devicetype":"huectl#mac"}' "http://$bridge_ip/api" 2>/dev/null || true)
+        app_key=$(printf '%s' "$response" | json_get "0.success.username" 2>/dev/null || true)
+
+        if [[ -n "$app_key" ]]; then
+            save_config "$bridge_ip" "$app_key"
+            print_success "Paired and saved config"
+            print_dim "$CONFIG_FILE"
+            exit 0
+        fi
+
+        error=$(printf '%s' "$response" | json_get "0.error.description" 2>/dev/null || true)
+        if [[ -z "$error" ]]; then
+            error="waiting"
+        fi
+
+        printf "\r${YELLOW}⏳${RESET} %s (%ss/%ss)" "$error" "$attempt" "$DEFAULT_TIMEOUT"
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    echo
+    print_error "Pairing timed out"
+    exit 1
+}
+
+run_config() {
+    load_config
+    print_header
+    echo
+    print_status "Config: $CONFIG_FILE"
+    if [[ -n "$BRIDGE_IP" ]]; then
+        print_status "Bridge: $BRIDGE_IP"
+    else
+        print_status "Bridge: not set"
+    fi
+    if [[ -n "$HUE_APP_KEY" ]]; then
+        print_status "App key: saved"
+    else
+        print_status "App key: missing"
+    fi
+}
+
+set_power() {
+    local desired="$1"
+    local body
+    local ids
+    local id
+    local name
+
+    require_config
+
+    if [[ "$desired" == "true" ]]; then
+        body="{\"on\":true,\"bri\":$BRIGHTNESS}"
+    else
+        body='{"on":false}'
+    fi
+
+    ids=$(target_ids "$TARGET")
+    if [[ -z "$ids" ]]; then
+        print_error "No lights matched target: $TARGET"
+        exit 1
+    fi
+
+    print_header
+    echo
+
+    for id in $ids; do
+        name=$(api_get "lights/$id" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("name", sys.argv[1]))' "$id")
+        if api_put "lights/$id/state" "$body" | ensure_api_success; then
+            if [[ "$desired" == "true" ]]; then
+                print_success "On: $name"
+            else
+                print_success "Off: $name"
+            fi
+        else
+            print_error "Failed: $name"
+            exit 1
+        fi
+    done
+}
+
+toggle_power() {
+    local ids
+    local id
+    local current
+
+    require_config
+
+    ids=$(target_ids "$TARGET")
+    if [[ -z "$ids" ]]; then
+        print_error "No lights matched target: $TARGET"
+        exit 1
+    fi
+
+    print_header
+    echo
+
+    for id in $ids; do
+        current=$(api_get "lights/$id" | json_get "state.on")
+        if [[ "$current" == "True" ]] || [[ "$current" == "true" ]]; then
+            TARGET="$id" set_power "false"
+        else
+            TARGET="$id" set_power "true"
+        fi
+    done
+}
+
+validate_brightness() {
+    if ! [[ "$BRIGHTNESS" =~ ^[0-9]+$ ]] || [[ "$BRIGHTNESS" -lt 1 ]] || [[ "$BRIGHTNESS" -gt 254 ]]; then
+        print_error "--brightness must be between 1 and 254"
+        exit 1
+    fi
+}
+
+#***** dependency checks *****
+require_command curl
+require_command python3
+
+#***** parse arguments *****
+if [[ $# -eq 0 ]]; then
+    show_help
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            ;;
+        -v|--version)
+            show_version
+            ;;
+        auth|discover|status|on|off|toggle|config)
+            if [[ -n "$COMMAND" ]]; then
+                print_error "Only one command can be used"
+                exit 1
+            fi
+            COMMAND="$1"
+            shift
+            ;;
+        -b|--brightness)
+            if [[ -z "$2" ]]; then
+                print_error "--brightness requires a value"
+                exit 1
+            fi
+            BRIGHTNESS="$2"
+            shift 2
+            ;;
+        --bridge)
+            if [[ -z "$2" ]]; then
+                print_error "--bridge requires an IP address"
+                exit 1
+            fi
+            BRIDGE_IP="$2"
+            shift 2
+            ;;
+        --timeout)
+            if [[ -z "$2" ]] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                print_error "--timeout requires seconds"
+                exit 1
+            fi
+            DEFAULT_TIMEOUT="$2"
+            shift 2
+            ;;
+        *)
+            if [[ "$TARGET" == "all" ]]; then
+                TARGET="$1"
+                shift
+            else
+                print_error "Unknown option: $1"
+                print_dim "Use 'huectl --help' for usage"
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+validate_brightness
+
+case "$COMMAND" in
+    auth)
+        run_auth
+        ;;
+    discover)
+        run_discover
+        ;;
+    status)
+        show_status
+        ;;
+    on)
+        set_power "true"
+        ;;
+    off)
+        set_power "false"
+        ;;
+    toggle)
+        toggle_power
+        ;;
+    config)
+        run_config
+        ;;
+    *)
+        show_help
+        ;;
+esac
